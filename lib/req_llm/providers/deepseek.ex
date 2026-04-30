@@ -49,4 +49,33 @@ defmodule ReqLLM.Providers.Deepseek do
   use ReqLLM.Provider.Defaults
 
   @provider_schema []
+
+  @impl ReqLLM.Provider
+  def build_body(request) do
+    body = ReqLLM.Provider.Defaults.default_build_body(request)
+
+    messages =
+      case Map.get(body, :messages) do
+        nil ->
+          nil
+
+        msgs when is_list(msgs) ->
+          Enum.map(msgs, fn msg ->
+            if Map.get(msg, :role) == "assistant" or Map.get(msg, "role") == "assistant" do
+              Map.put_new(msg, :reasoning_content, "")
+            else
+              msg
+            end
+          end)
+
+        other ->
+          other
+      end
+
+    if messages do
+      Map.put(body, :messages, messages)
+    else
+      body
+    end
+  end
 end
