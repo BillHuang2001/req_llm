@@ -60,13 +60,7 @@ defmodule ReqLLM.Providers.Deepseek do
           nil
 
         msgs when is_list(msgs) ->
-          Enum.map(msgs, fn msg ->
-            if Map.get(msg, :role) == "assistant" or Map.get(msg, "role") == "assistant" do
-              Map.put_new(msg, :reasoning_content, "")
-            else
-              msg
-            end
-          end)
+          Enum.map(msgs, &ensure_assistant_reasoning_content/1)
 
         other ->
           other
@@ -78,4 +72,24 @@ defmodule ReqLLM.Providers.Deepseek do
       body
     end
   end
+
+  defp ensure_assistant_reasoning_content(msg) do
+    if assistant_message?(msg) and not has_reasoning_content?(msg) do
+      Map.put(msg, :reasoning_content, "")
+    else
+      msg
+    end
+  end
+
+  defp assistant_message?(msg) when is_map(msg) do
+    Map.get(msg, :role) == "assistant" or Map.get(msg, "role") == "assistant"
+  end
+
+  defp assistant_message?(_msg), do: false
+
+  defp has_reasoning_content?(msg) when is_map(msg) do
+    Map.has_key?(msg, :reasoning_content) or Map.has_key?(msg, "reasoning_content")
+  end
+
+  defp has_reasoning_content?(_msg), do: false
 end
