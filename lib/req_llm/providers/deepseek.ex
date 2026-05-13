@@ -31,6 +31,14 @@ defmodule ReqLLM.Providers.Deepseek do
       ReqLLM.stream_text("deepseek:deepseek-chat", "Tell me a story")
       |> Enum.each(&IO.write/1)
 
+      # JSON output (structured output)
+      ReqLLM.generate_object("deepseek:deepseek-chat", "Extract user info",
+        schema: [
+          name: [type: :string, required: true],
+          age: [type: :integer, required: true]
+        ]
+      )
+
       # With thinking mode enabled (default for reasoning models)
       ReqLLM.generate_text("deepseek:deepseek-v4-pro", "Solve this complex problem",
         provider_options: [
@@ -61,6 +69,33 @@ defmodule ReqLLM.Providers.Deepseek do
   - `deepseek-reasoner` - Reasoning and problem-solving
   - `deepseek-v4-flash` - Fast reasoning model with lower latency
   - `deepseek-v4-pro` - Latest reasoning model with thinking support
+
+  ## JSON Output
+
+  DeepSeek provides JSON Output to ensure the model outputs valid JSON strings.
+
+  To use JSON output with `generate_object/3`:
+
+      ReqLLM.generate_object("deepseek:deepseek-chat", "Extract information",
+        schema: [
+          name: [type: :string],
+          age: [type: :integer],
+          email: [type: :string]
+        ]
+      )
+
+  This automatically sets `response_format` to `%{type: "json_object"}` and includes
+  JSON formatting instructions in the system prompt.
+
+  For manual control via `generate_text/3`:
+
+      ReqLLM.generate_text("deepseek:deepseek-chat", "Return JSON only",
+        provider_options: [response_format: %{type: "json_object"}],
+        max_tokens: 1000
+      )
+
+  **Note:** When using JSON output, include "json" in your prompt and set reasonable
+  `max_tokens` to prevent truncation.
 
   ## Thinking Mode
 
@@ -105,8 +140,55 @@ defmodule ReqLLM.Providers.Deepseek do
       Thinking mode configuration. Set to %{type: "enabled"} to enable or %{type: "disabled"} to disable.
       Defaults to enabled for reasoning models. See https://api-docs.deepseek.com/guides/thinking_mode
       """
+    ],
+    response_format: [
+      type: :map,
+      doc: """
+      Response format configuration. For JSON output, use: %{type: "json_object"}.
+      When using json_object mode, include "json" in your prompt. See https://api-docs.deepseek.com/guides/json_mode
+      """
     ]
   ]
+
+  @impl ReqLLM.Provider
+  def prepare_request(:object, model_spec, prompt, opts) do
+    compiled_schema = Keyword.fetch!(opts, :compiled_schema)
+
+    json_schema = ReqLLM.Schema.to_json(compiled_schema.schema)
+
+    schema_name = Map.get(compiled_schema, :name, "output_schema")
+
+    base_prompt = """
+    Please output the result as a valid JSON object matching this schema:
+
+    #{Jason.encode!(json_schema, pretty: true)}
+
+    Output ONLY the JSON object, no additional text.
+    """
+
+    full_prompt = "#{base_prompt}\n\nUser request: #{prompt}"
+
+    response_format = %{type: "json_object"}
+
+    opts_with_format =
+      opts
+      |> Keyword.update(:provider_options, [response_format: response_format], fn existing ->
+        Keyword.put(existing, :response_format, response_format)
+      end)
+      |> Keyword.put(:operation, :object)
+
+    ReqLLM.Provider.Defaults.prepare_request(
+      __MODULE__,
+      :chat,
+      model_spec,
+      full_prompt,
+      opts_with_format
+    )
+  end
+
+  def prepare_request(operation, model_spec, input, opts) do
+    ReqLLM.Provider.Defaults.prepare_request(__MODULE__, operation, model_spec, input, opts)
+  end
 
   @impl ReqLLM.Provider
   def translate_options(_operation, _model, opts) do
@@ -135,6 +217,7 @@ defmodule ReqLLM.Providers.Deepseek do
     |> ensure_assistant_reasoning_content()
     |> maybe_put(:thinking, normalize_thinking(provider_opts[:thinking]))
     |> maybe_put(:reasoning_effort, request.options[:reasoning_effort])
+    |> maybe_put(:response_format, provider_opts[:response_format])
   end
 
   defp ensure_assistant_reasoning_content(body) do

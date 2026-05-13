@@ -475,4 +475,91 @@ defmodule ReqLLM.Providers.DeepseekTest do
       refute Map.has_key?(assistant_msg, :reasoning_content)
     end
   end
+
+  describe "JSON output" do
+    test "provider schema includes response_format option" do
+      schema = Deepseek.provider_schema().schema
+      schema_keys = Keyword.keys(schema)
+
+      assert :response_format in schema_keys
+
+      response_format_schema = Keyword.get(schema, :response_format)
+      assert response_format_schema[:type] == :map
+    end
+
+    test "prepare_request for :object sets response_format and modifies prompt" do
+      model = deepseek_model()
+      schema = [name: [type: :string], age: [type: :integer]]
+
+      compiled_schema = %{
+        name: "test_schema",
+        schema: schema,
+        struct: nil,
+        original: schema
+      }
+
+      opts = [compiled_schema: compiled_schema]
+
+      {:ok, request} = Deepseek.prepare_request(:object, model, "Extract name and age", opts)
+
+      assert %Req.Request{} = request
+      assert request.options[:operation] == :object
+
+      provider_opts = request.options[:provider_options]
+      assert provider_opts[:response_format] == %{type: "json_object"}
+
+      # Check that prompt includes JSON instructions
+      context = request.options[:context]
+      assert context != nil
+
+      user_message = Enum.find(context.messages, fn msg -> msg.role == :user end)
+      assert user_message != nil
+
+      prompt_text =
+        case user_message.content do
+          text when is_binary(text) -> text
+          list when is_list(list) -> Enum.find(list, fn part -> part.type == :text end).text
+        end
+
+      assert prompt_text =~ "JSON object"
+      assert prompt_text =~ "Extract name and age"
+    end
+
+    test "prepare_request for :object respects existing max_tokens" do
+      model = deepseek_model()
+      schema = [name: [type: :string]]
+
+      compiled_schema = %{
+        name: "test_schema",
+        schema: schema,
+        struct: nil,
+        original: schema
+      }
+
+      opts = [compiled_schema: compiled_schema, max_tokens: 1000]
+
+      {:ok, request} = Deepseek.prepare_request(:object, model, "Extract name", opts)
+
+      # Should use the provided max_tokens
+      assert request.options[:max_tokens] == 1000
+    end
+
+    test "build_body includes response_format from provider_options" do
+      model = deepseek_model()
+      context = context_fixture()
+
+      mock_request = %Req.Request{
+        options: [
+          context: context,
+          model: model.model,
+          stream: false,
+          provider_options: [response_format: %{type: "json_object"}]
+        ]
+      }
+
+      body = Deepseek.build_body(mock_request)
+
+      assert body[:response_format] == %{type: "json_object"}
+    end
+  end
 end
